@@ -29,18 +29,44 @@
  */
 
 #include <libavutil/timestamp.h>
+#include <libavutil/avstring.h>
 #include <libavformat/avformat.h>
 
 static void log_packet(const AVFormatContext *fmt_ctx, const AVPacket *pkt, const char *tag)
 {
     AVRational *time_base = &fmt_ctx->streams[pkt->stream_index]->time_base;
 
-    printf("%s: pts:%s pts_time:%s dts:%s dts_time:%s duration:%s duration_time:%s stream_index:%d\n",
+    printf("%s: pts:%s pts_time:%s dts:%s dts_time:%s duration:%s duration_time:%s stream_index:%d time_base:%d/%d\n",
            tag,
            av_ts2str(pkt->pts), av_ts2timestr(pkt->pts, time_base),
            av_ts2str(pkt->dts), av_ts2timestr(pkt->dts, time_base),
            av_ts2str(pkt->duration), av_ts2timestr(pkt->duration, time_base),
-           pkt->stream_index);
+           pkt->stream_index, time_base->num, time_base->den);
+}
+
+char s_errbuff[500];
+static char *ff_err2str(int errRet) {
+  av_strerror(errRet, (char *)(&s_errbuff), 500);
+  return s_errbuff;
+}
+
+// example:https://www.ffmpeg.org/ffmpeg-all.html#hls-2
+// ffmpeg -i rtmp://xx/livestream -c copy -hls_time 5 -hls_list_size 0 -start_number 1
+// -hls_segment_filename /xxdir/test_%Y-%m-%d-%H-%M-%S_%%08t_%%04d.ts /xxdir/test.m3u8
+static int write_hls_header(const char* out_filename, AVFormatContext* context) {
+  AVDictionary *options = NULL;
+  av_dict_set(&options, "hls_time", "5", 0);
+  av_dict_set(&options, "hls_list_size", "0", 0);
+  av_dict_set(&options, "start_number", "1", 0);
+  av_dict_set(&options, "strftime", "1", 0);
+  av_dict_set(&options, "hls_flags",
+              "second_level_segment_duration+second_level_segment_index", 0);
+
+  char hls_segment_filename[1024];
+  memset(hls_segment_filename, 0, 1024);
+  sprintf(hls_segment_filename, "%s/%s", av_dirname(out_filename), "%Y-%m-%d-%H-%M-%S_%%08t_%%04d.ts");
+  av_dict_set(&options, "hls_segment_filename", hls_segment_filename, 0);
+  return avformat_write_header(context, options != NULL ? &options : NULL);
 }
 
 int main(int argc, char **argv)
@@ -77,7 +103,8 @@ int main(int argc, char **argv)
 
     av_dump_format(ifmt_ctx, 0, in_filename, 0);
 
-    avformat_alloc_output_context2(&ofmt_ctx, NULL, NULL, out_filename);
+    // set format to hls.
+    avformat_alloc_output_context2(&ofmt_ctx, NULL, "hls", out_filename);
     if (!ofmt_ctx) {
         fprintf(stderr, "Could not create output context\n");
         ret = AVERROR_UNKNOWN;
@@ -124,17 +151,17 @@ int main(int argc, char **argv)
     av_dump_format(ofmt_ctx, 0, out_filename, 1);
 
     if (!(ofmt->flags & AVFMT_NOFILE)) {
-        ret = avio_open(&ofmt_ctx->pb, out_filename, AVIO_FLAG_WRITE);
-        if (ret < 0) {
-            fprintf(stderr, "Could not open output file '%s'", out_filename);
-            goto end;
-        }
+      ret = avio_open(&ofmt_ctx->pb, out_filename, AVIO_FLAG_WRITE);
+      if (ret < 0) {
+          fprintf(stderr, "Could not open output file '%s'", out_filename);
+          goto end;
+      }
     }
 
-    ret = avformat_write_header(ofmt_ctx, NULL);
-    if (ret < 0) {
-        fprintf(stderr, "Error occurred when opening output file\n");
-        goto end;
+    ret = write_hls_header(out_filename, ofmt_ctx);
+    if(ret){
+      fprintf(stderr, "Could not write hls header, error: %s\n", ff_err2str(ret));
+      goto end;
     }
 
     while (1) {
