@@ -26,6 +26,7 @@ EXAMPLES=       avio_list_dir                      \
                 metadata                           \
                 muxing                             \
                 remuxing                           \
+                remuxing_bsf                       \
                 resampling_audio                   \
                 scaling_video                      \
                 transcode_aac                      \
